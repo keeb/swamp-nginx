@@ -1,0 +1,10 @@
+manifestVersion: 1
+name: "@keeb/nginx"
+version: "2026.02.27.1"
+description: "Nginx stream proxy configuration over SSH"
+models:
+  - nginx_stream.ts
+workflows:
+  - configure-proxy/workflow.yaml
+dependencies:
+  - "@keeb/ssh"
