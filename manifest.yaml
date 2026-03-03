@@ -1,7 +1,12 @@
 manifestVersion: 1
 name: "@keeb/nginx"
-version: "2026.02.27.1"
+version: "2026.03.02.2"
 description: "Nginx stream proxy configuration over SSH (https://github.com/keeb/swamp-nginx)"
+repository: https://github.com/keeb/swamp-nginx
+tags:
+  - nginx
+  - networking
+  - proxy
 models:
   - nginx_stream.ts
 workflows:
