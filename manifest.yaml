@@ -1,12 +1,16 @@
 manifestVersion: 1
 name: "@keeb/nginx"
-version: "2026.04.06.1"
-description: "Nginx stream proxy configuration over SSH (https://github.com/keeb/swamp-nginx)"
+version: "2026.05.23.1"
+description: "Configure nginx as a TCP/UDP stream proxy on a remote host over SSH, with bootstrap and per-service proxy configuration."
 repository: https://github.com/keeb/swamp-nginx
 labels:
   - nginx
   - networking
   - proxy
+platforms: []
+additionalFiles:
+  - README.md
+  - LICENSE.txt
 models:
   - nginx_stream.ts
 workflows:

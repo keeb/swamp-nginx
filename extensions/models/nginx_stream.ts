@@ -1,16 +1,26 @@
+/**
+ * Model `@keeb/nginx/stream` — configures nginx as a TCP/UDP stream proxy on a
+ * remote host over SSH. Exposes `init` (bootstrap the container and config
+ * directory) and `configure` (write a per-backend stream config and reload
+ * nginx via docker compose).
+ */
 import { z } from "npm:zod@4";
 import { sshExec } from "./lib/ssh.ts";
 
 const GlobalArgs = z.object({
   sshHost: z.string().describe("SSH hostname for the proxy server"),
   sshUser: z.string().default("keeb").describe("SSH user (default 'keeb')"),
-  streamDir: z.string().default("~/stream").describe("Path to stream proxy directory"),
+  streamDir: z.string().default("~/stream").describe(
+    "Path to stream proxy directory",
+  ),
 });
 
 const ConfigureArgs = z.object({
   vmName: z.string().describe("Service name used for config filename"),
   targetIp: z.string().describe("Tailscale IP of the backend service"),
-  portMap: z.string().describe("Port mappings: 'listen:backend[/proto],...' e.g. '25565:25565,7777:7777/udp'"),
+  portMap: z.string().describe(
+    "Port mappings: 'listen:backend[/proto],...' e.g. '25565:25565,7777:7777/udp'",
+  ),
 });
 
 const InitSchema = z.object({
@@ -48,7 +58,9 @@ function parsePortMap(portMap) {
 
 function generateNginxConfig(targetIp, mappings) {
   const blocks = mappings.map(({ listen, backend, proto }) => {
-    const listenDirective = proto === "udp" ? `listen ${listen} udp;` : `listen ${listen};`;
+    const listenDirective = proto === "udp"
+      ? `listen ${listen} udp;`
+      : `listen ${listen};`;
     return `server {\n    ${listenDirective}\n    proxy_pass ${targetIp}:${backend};\n}`;
   });
   return blocks.join("\n\n") + "\n";
@@ -61,9 +73,10 @@ function formatPortLine(listen, proto) {
   return `'${listen}:${listen}'`;
 }
 
+/** Nginx stream proxy model definition. */
 export const model = {
-  type: "@user/nginx/stream",
-  version: "2026.02.14.1",
+  type: "@keeb/nginx/stream",
+  version: "2026.05.23.1",
   resources: {
     "server": {
       description: "Proxy server init result",
@@ -84,9 +97,12 @@ export const model = {
       description: "Bootstrap nginx stream proxy directory and start container",
       arguments: z.object({}),
       execute: async (_args, context) => {
-        const { sshHost, sshUser = "keeb", streamDir = "~/stream" } = context.globalArgs;
+        const { sshHost, sshUser = "keeb", streamDir = "~/stream" } =
+          context.globalArgs;
 
-        console.log(`[init] Bootstrapping stream proxy on ${sshHost} at ${streamDir}`);
+        console.log(
+          `[init] Bootstrapping stream proxy on ${sshHost} at ${streamDir}`,
+        );
 
         // Create directory structure
         await sshExec(sshHost, sshUser, `mkdir -p ${streamDir}/stream.d`);
@@ -96,7 +112,11 @@ export const model = {
 events { worker_connections 1024; }
 stream { include /stream.d/*.conf; }
 `;
-        await sshExec(sshHost, sshUser, `cat > ${streamDir}/nginx.conf << 'EOF'\n${nginxConf}EOF`);
+        await sshExec(
+          sshHost,
+          sshUser,
+          `cat > ${streamDir}/nginx.conf << 'EOF'\n${nginxConf}EOF`,
+        );
 
         // Write base docker-compose.yml
         const composeYml = `services:
@@ -109,11 +129,20 @@ stream { include /stream.d/*.conf; }
       - ./stream.d:/stream.d:ro
     restart: unless-stopped
 `;
-        await sshExec(sshHost, sshUser, `cat > ${streamDir}/docker-compose.yml << 'EOF'\n${composeYml}EOF`);
+        await sshExec(
+          sshHost,
+          sshUser,
+          `cat > ${streamDir}/docker-compose.yml << 'EOF'\n${composeYml}EOF`,
+        );
 
-        // Pull and start the container
+        // Start the container, skipping if already running and cleaning up
+        // any stale stopped/crashed container that would block creation.
         console.log(`[init] Starting nginx proxy container`);
-        await sshExec(sshHost, sshUser, `cd ${streamDir} && docker compose up -d`);
+        await sshExec(
+          sshHost,
+          sshUser,
+          `cd ${streamDir} && (docker compose ps --status running --quiet nginx-proxy 2>/dev/null | grep -q . || { docker rm -f stream-proxy 2>/dev/null; docker compose up -d; })`,
+        );
 
         console.log(`[init] Stream proxy bootstrapped successfully`);
         const handle = await context.writeResource("server", "server", {
@@ -129,26 +158,38 @@ stream { include /stream.d/*.conf; }
       arguments: ConfigureArgs,
       execute: async (args, context) => {
         const { vmName, targetIp, portMap } = args;
-        const { sshHost, sshUser = "keeb", streamDir = "~/stream" } = context.globalArgs;
+        const { sshHost, sshUser = "keeb", streamDir = "~/stream" } =
+          context.globalArgs;
 
         const mappings = parsePortMap(portMap);
-        console.log(`[configure] Configuring proxy for ${vmName} -> ${targetIp} (${mappings.length} port mapping(s))`);
+        console.log(
+          `[configure] Configuring proxy for ${vmName} -> ${targetIp} (${mappings.length} port mapping(s))`,
+        );
 
         // 1. Generate and write nginx stream config
         const nginxConfig = generateNginxConfig(targetIp, mappings);
         const confPath = `${streamDir}/stream.d/${vmName}-nginx.conf`;
         console.log(`[configure] Writing nginx config to ${confPath}`);
 
-        await sshExec(sshHost, sshUser, `cat > ${confPath} << 'NGINX_EOF'\n${nginxConfig}NGINX_EOF`);
+        await sshExec(
+          sshHost,
+          sshUser,
+          `cat > ${confPath} << 'NGINX_EOF'\n${nginxConfig}NGINX_EOF`,
+        );
 
         // 2. Read current docker-compose.yml
         console.log(`[configure] Reading docker-compose.yml`);
-        const composeResult = await sshExec(sshHost, sshUser, `cat ${streamDir}/docker-compose.yml`);
+        const composeResult = await sshExec(
+          sshHost,
+          sshUser,
+          `cat ${streamDir}/docker-compose.yml`,
+        );
         const composeContent = composeResult.stdout;
 
         // 3. Add missing ports to docker-compose.yml
         const existingPorts = new Set();
-        const portLineRegex = /^\s*-\s*['"]?(\d+):(\d+)(?:\/(tcp|udp))?['"]?\s*$/gm;
+        const portLineRegex =
+          /^\s*-\s*['"]?(\d+):(\d+)(?:\/(tcp|udp))?['"]?\s*$/gm;
         let match;
         while ((match = portLineRegex.exec(composeContent)) !== null) {
           const port = match[1];
@@ -165,13 +206,17 @@ stream { include /stream.d/*.conf; }
         }
 
         if (portsToAdd.length > 0) {
-          console.log(`[configure] Adding ${portsToAdd.length} new port(s) to docker-compose.yml`);
+          console.log(
+            `[configure] Adding ${portsToAdd.length} new port(s) to docker-compose.yml`,
+          );
 
           const lines = composeContent.split("\n");
           let updatedCompose;
 
           // Check for empty ports array (ports: [])
-          const emptyPortsIdx = lines.findIndex((l) => /^\s*ports:\s*\[\s*\]\s*$/.test(l));
+          const emptyPortsIdx = lines.findIndex((l) =>
+            /^\s*ports:\s*\[\s*\]\s*$/.test(l)
+          );
           if (emptyPortsIdx >= 0) {
             const indent = lines[emptyPortsIdx].match(/^(\s*)/)[1];
             const newPortLines = portsToAdd.map((p) => `${indent}  - ${p}`);
@@ -198,15 +243,25 @@ stream { include /stream.d/*.conf; }
 
           if (updatedCompose) {
             console.log(`[configure] Writing updated docker-compose.yml`);
-            await sshExec(sshHost, sshUser, `cat > ${streamDir}/docker-compose.yml << 'COMPOSE_EOF'\n${updatedCompose}COMPOSE_EOF`);
+            await sshExec(
+              sshHost,
+              sshUser,
+              `cat > ${streamDir}/docker-compose.yml << 'COMPOSE_EOF'\n${updatedCompose}COMPOSE_EOF`,
+            );
           }
         } else {
-          console.log(`[configure] All ports already present in docker-compose.yml`);
+          console.log(
+            `[configure] All ports already present in docker-compose.yml`,
+          );
         }
 
-        // 4. Restart nginx
+        // 4. Restart nginx — retry once after removing stale container on failure.
         console.log(`[configure] Restarting nginx proxy`);
-        await sshExec(sshHost, sshUser, `cd ${streamDir} && docker compose up -d`);
+        await sshExec(
+          sshHost,
+          sshUser,
+          `cd ${streamDir} && (docker compose up -d || { docker rm -f stream-proxy 2>/dev/null; docker compose up -d; })`,
+        );
 
         console.log(`[configure] Proxy configured successfully for ${vmName}`);
         const handle = await context.writeResource("proxy", "proxy", {

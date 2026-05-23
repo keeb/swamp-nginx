@@ -1,5 +1,5 @@
 id: 08985fcf-edbe-4353-8bcb-2ee26d14614c
-name: configure-proxy
+name: '@keeb/configure-proxy'
 description: Configure nginx stream proxy for a backend service
 inputs:
   vmName:

@@ -1,4 +1,5 @@
 # Swamp runtime
+.swamp/_extension_catalog.db*
 .swamp/bundles/
 .swamp/data/
 .swamp/outputs/
