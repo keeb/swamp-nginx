@@ -29,6 +29,16 @@ const InitSchema = z.object({
   timestamp: z.string(),
 });
 
+const ListingSchema = z.object({
+  configs: z.array(z.object({
+    file: z.string(),
+    listens: z.array(z.string()),
+    backends: z.array(z.string()),
+  })),
+  publishedPorts: z.array(z.string()),
+  timestamp: z.string(),
+});
+
 const ProxySchema = z.object({
   success: z.boolean(),
   vmName: z.string(),
@@ -76,11 +86,17 @@ function formatPortLine(listen, proto) {
 /** Nginx stream proxy model definition. */
 export const model = {
   type: "@keeb/nginx/stream",
-  version: "2026.05.23.1",
+  version: "2026.10.11.1",
   resources: {
     "server": {
       description: "Proxy server init result",
       schema: InitSchema,
+      lifetime: "infinite",
+      garbageCollection: 10,
+    },
+    "listing": {
+      description: "Current stream configs and published ports",
+      schema: ListingSchema,
       lifetime: "infinite",
       garbageCollection: 10,
     },
@@ -148,6 +164,65 @@ stream { include /stream.d/*.conf; }
         const handle = await context.writeResource("server", "server", {
           success: true,
           streamDir,
+          timestamp: new Date().toISOString(),
+        });
+        return { dataHandles: [handle] };
+      },
+    },
+    list: {
+      description:
+        "List existing stream configs (listen ports + backends) and the ports published in docker-compose.yml",
+      arguments: z.object({}),
+      execute: async (_args, context) => {
+        const { sshHost, sshUser = "keeb", streamDir = "~/stream" } =
+          context.globalArgs;
+
+        const confResult = await sshExec(
+          sshHost,
+          sshUser,
+          `for f in ${streamDir}/stream.d/*.conf; do [ -f "$f" ] && echo "### $(basename $f)" && cat "$f"; done`,
+        );
+        const configs = [];
+        let current = null;
+        for (const line of confResult.stdout.split("\n")) {
+          const header = line.match(/^### (.+)$/);
+          if (header) {
+            current = { file: header[1], listens: [], backends: [] };
+            configs.push(current);
+            continue;
+          }
+          if (!current) continue;
+          const listen = line.match(/^\s*listen\s+([^;]+);/);
+          if (listen) current.listens.push(listen[1].trim());
+          const pass = line.match(/^\s*proxy_pass\s+([^;]+);/);
+          if (pass) current.backends.push(pass[1].trim());
+        }
+
+        const composeResult = await sshExec(
+          sshHost,
+          sshUser,
+          `cat ${streamDir}/docker-compose.yml`,
+        );
+        const publishedPorts = [];
+        const portLineRegex =
+          /^\s*-\s*['"]?(\d+:\d+(?:\/(?:tcp|udp))?)['"]?\s*$/gm;
+        let match;
+        while ((match = portLineRegex.exec(composeResult.stdout)) !== null) {
+          publishedPorts.push(match[1]);
+        }
+
+        for (const c of configs) {
+          console.log(
+            `[list] ${c.file}: ${c.listens.join(", ")} -> ${
+              c.backends.join(", ")
+            }`,
+          );
+        }
+        console.log(`[list] published: ${publishedPorts.join(", ")}`);
+
+        const handle = await context.writeResource("listing", "listing", {
+          configs,
+          publishedPorts,
           timestamp: new Date().toISOString(),
         });
         return { dataHandles: [handle] };
